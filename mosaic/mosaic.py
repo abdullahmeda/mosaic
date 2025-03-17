@@ -6,14 +6,12 @@ from pathlib import Path
 from qdrant_client.http import models
 from qdrant_client import QdrantClient
 from pdf2image import convert_from_path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union
 
 from mosaic.local import LocalInferenceClient
 from mosaic.cloud import CloudInferenceClient
 
 import torch
-from colpali_engine.models import ColQwen2, ColQwen2Processor
-from transformers.utils.import_utils import is_flash_attn_2_available
 
 class Mosaic:
 
@@ -115,7 +113,7 @@ class Mosaic:
         )
         
 
-    def index_image(self, image: Image, metadata: dict):
+    def index_image(self, image: Image.Image, metadata: dict):
         embedding = self.inference_client.encode_image(image)
         
         self._add_to_index(
@@ -166,8 +164,37 @@ class Mosaic:
             raise ValueError("Path is not a directory")
         
 
-    def search(self, query: str, top_k: int = 5):
+    def search_text(
+        self, 
+        query: str, 
+        top_k: int = 5
+    ):
         embedding = self.inference_client.encode_query(query)
+        
+        results = self.qdrant_client.query_points(
+            collection_name=self.collection_name,
+            query=embedding[0],
+            limit=top_k
+        )
+
+        return results.points
+    
+
+    def search_image(
+        self, 
+        image: Union[Image.Image, Path, str], 
+        description: str = None, 
+        top_k: int = 5
+    ):
+        if isinstance(image, (Path, str)):
+            image = Image.open(image)
+
+        embedding = self.inference_client.encode_image(image)
+        if description:
+            description_embedding = self.inference_client.encode_query(description)
+            embedding = torch.cat([
+                torch.tensor(embedding), torch.tensor(description_embedding)
+            ], dim=1).tolist()
         
         results = self.qdrant_client.query_points(
             collection_name=self.collection_name,
