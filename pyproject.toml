@@ -7,7 +7,7 @@ include = ["mosaic*"]
 
 [project]
 name = "mosaic-mmrag"
-version = "0.0.1"
+version = "0.0.6"
 description = "Use late-interaction multi-modal models such as ColPali & ColQwen2 for retrieval, with Qdrant as a backend."
 authors = [{ name = "Abdullah Meda", email = "abdullah.meda@gmail.com" }]
 readme = "README.md"

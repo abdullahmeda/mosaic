@@ -2,16 +2,11 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict
 
 
-class ColPaliRequest(BaseModel):
-    inputs: List[str]
-    image_input: bool = False
-
-
 class Document(BaseModel):
-    rank: int
-    doc_id: str
-    doc_abs_path: str
+    pdf_id: str
     page: int
-    score: float
+    rank: Optional[int]
     image: Optional[str]
+    score: Optional[float]
     metadata: Optional[Dict]
+    pdf_abs_path: Optional[str]

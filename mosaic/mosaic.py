@@ -1,5 +1,4 @@
 import uuid
-import logging
 
 from tqdm import tqdm
 from PIL import Image
@@ -14,9 +13,6 @@ from mosaic.utils import *
 from mosaic.schemas import Document
 from mosaic.local import LocalInferenceClient
 from mosaic.cloud import CloudInferenceClient
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 class Mosaic:
@@ -33,7 +29,6 @@ class Mosaic:
         self.inference_client = inference_client
 
         self.qdrant_client = db_client or QdrantClient(":memory:")
-        logger.info(f"Using Qdrant client: {'In-memory' if db_client is None else 'localhost'}")
 
         if not self.collection_exists():
             result = self._create_collection(binary_quantization)
@@ -108,36 +103,35 @@ class Mosaic:
     def _add_to_index(
         self, 
         vectors: List[List[List[float]]],
-        payloads: List[Dict[str, Any]]
+        payloads: List[Dict[str, Any]],
+        batch_size: int = 16
     ):
         
         assert len(vectors) == len(payloads), "Vectors and payloads must be of the same length"
 
-        ids = [str(uuid.uuid4()) for _ in range(len(vectors))]
+        for i in range(0, len(vectors), batch_size):
+            batch_end = min(i + batch_size, len(vectors))
 
-        self.qdrant_client.upsert(
-            collection_name=self.collection_name,
-            points=models.Batch(
-                ids=ids,
-                vectors=vectors,
-                payloads=payloads
-            )
-        )
+            # Slice the data for the current batch
+            current_batch_vectors = vectors[i:batch_end]
+            current_batch_payloads = payloads[i:batch_end]
+            batch_len = len(current_batch_vectors)
 
-        try:
-            self.qdrant_client.upsert(
-                collection_name=self.collection_name,
-                points=models.Batch(
-                    ids=ids,
-                    vectors=vectors,
-                    payloads=payloads
-                ),
-                wait=True # Ensure operation completes before proceeding in critical paths
-            )
-            logger.debug(f"Upserted {len(ids)} points to collection '{self.collection_name}'.")
+            current_batch_ids = [str(uuid.uuid4()) for _ in range(batch_len)]
 
-        except Exception as e:
-            logger.error(f"Failed to upsert points to collection '{self.collection_name}': {str(e)}")
+            try:
+                self.qdrant_client.upsert(
+                    collection_name=self.collection_name,
+                    points=models.Batch(
+                        ids=current_batch_ids,
+                        vectors=current_batch_vectors,
+                        payloads=current_batch_payloads
+                    ),
+                    wait=True
+                )
+
+            except Exception as e:
+                print(f"Failed to upsert points to collection '{self.collection_name}': {str(e)}")
         
 
     def index_image(
@@ -147,7 +141,7 @@ class Mosaic:
         store_img_bs64: Optional[bool] = True,
         max_image_dims: Tuple[int, int] = (1568, 1568)
     ):
-        logger.debug(f"Encoding single image for indexing.")
+        image_id = str(uuid.uuid4())
 
         max_img_height, max_img_width = max_image_dims
         image = resize_image(image, max_img_height, max_img_width)
@@ -157,8 +151,8 @@ class Mosaic:
         embedding = self.inference_client.encode_image(image)
 
         payload = {
-            "doc_id": str(uuid.uuid4()), # Treat single image as a document
-            "doc_abs_path": None,        # No file path for direct image
+            "pdf_id": str(uuid.uuid4()), # Treat single image as a document
+            "pdf_abs_path": None,        # No file path for direct image
             "page": 1,
             "image": bs64_image if store_img_bs64 else None,
             "metadata": metadata or {},
@@ -168,6 +162,8 @@ class Mosaic:
             vectors=embedding,
             payloads=[payload]
         )
+
+        return image_id
         
     
     def index_file(
@@ -183,31 +179,30 @@ class Mosaic:
         abs_path = path.absolute()
 
         if not path.is_file():
-            logger.error(f"Path is not a file: {path}")
+            print(f"Path is not a file: {path}")
             raise FileNotFoundError(f"File not found: {path}")
         
         if path.suffix.lower() != '.pdf':
-            logger.warning(f"File is not a PDF: {path}")
+            print(f"File is not a PDF: {path}")
             raise ValueError(f"File not a PDF: {path}")
 
-        # --- Check for existing entries ---
-        existing_points = self.qdrant_client.scroll(
+        # --- Check for existing entries using count ---
+        count_result = self.qdrant_client.count(
             collection_name=self.collection_name,
-            scroll_filter=models.Filter(
+            count_filter=models.Filter(
                 must=[
                     models.FieldCondition(
-                        key="doc_abs_path",
+                        key="pdf_abs_path",
                         match=models.MatchValue(value=str(abs_path))
                     )
                 ]
             ),
-            limit=1, # We only need to know if at least one exists
-            with_vectors=False, with_payload=False
-        )[0] # scroll returns a tuple (points, next_offset)
+            exact=False # Set to True if you need the exact count, False is faster for just checking > 0
+        )
 
-        if existing_points:
+        if count_result.count > 0:
             # TODO: Implement overwrite or skip logic
-            logger.warning(f"File is already indexed: {path}")
+            print(f"File is already indexed: {path}")
             raise ValueError(f"File is already indexed: {path}")
         
 
@@ -220,14 +215,19 @@ class Mosaic:
         if store_img_bs64:
             base64_images = base64_encode_image_list(images)
 
-        doc_id = str(uuid.uuid4())
+        pdf_id = str(uuid.uuid4())
         
         payloads = []
         embeddings = []
-        for i, (image, bs64_img) in enumerate(tqdm(zip(images, base64_images), total=len(images)), start=1):
+        for i, (image, bs64_img) in enumerate(tqdm(
+            zip(images, base64_images), 
+            total=len(images),
+            desc=f"Indexing {str(path)}",
+        ), start=1):
+            
             extended_metadata = {
-                "doc_id": doc_id,
-                "doc_abs_path": str(abs_path),
+                "pdf_id": pdf_id,
+                "pdf_abs_path": str(abs_path),
                 "page": i,
                 "image": bs64_img,
                 "metadata": metadata,
@@ -250,6 +250,8 @@ class Mosaic:
         del images
         del embeddings
 
+        return pdf_id
+
     
     def index_directory(
         self, 
@@ -261,21 +263,34 @@ class Mosaic:
         if type(path) == str:
             path = Path(path)
 
-        if path.is_dir():
-            for file in path.iterdir():
-
-                # Check if its a pdf
-                if file.suffix == ".pdf":
-                    self.index_file(
-                        path=file,
-                        metadata=metadata,
-                        store_img_bs64=store_img_bs64, 
-                        max_image_dims=max_image_dims,
-                    )
-
-        else:
+        if not path.is_dir():
             raise ValueError("Path is not a directory")
+    
+        docid2path = {}
+        for file in path.iterdir():
+
+            # Check if its a pdf
+            if file.suffix == ".pdf":
+                pdf_id = self.index_file(
+                    path=file,
+                    metadata=metadata,
+                    store_img_bs64=store_img_bs64, 
+                    max_image_dims=max_image_dims,
+                )
+                docid2path[pdf_id] = str(file.absolute())
+
+            # Check if its an image file
+            if file.suffix in [".png", ".jpg", ".jpeg"]:
+                image = Image.open(file)
+                image_id = self.index_image(
+                    image=image,
+                    metadata=metadata,
+                    store_img_bs64=store_img_bs64,
+                    max_image_dims=max_image_dims
+                )
+                docid2path[image_id] = str(file.absolute())
         
+        return docid2path
 
     def search_text(
         self, 
