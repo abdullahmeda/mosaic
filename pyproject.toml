@@ -7,7 +7,7 @@ include = ["mosaic*"]
 
 [project]
 name = "mosaic-mmrag"
-version = "0.0.6"
+version = "0.1.1"
 description = "Use late-interaction multi-modal models such as ColPali & ColQwen2 for retrieval, with Qdrant as a backend."
 authors = [{ name = "Abdullah Meda", email = "abdullah.meda@gmail.com" }]
 readme = "README.md"
@@ -20,13 +20,14 @@ classifiers = [
 ]
 dependencies = [
     "pdf2image",
-    "colpali_engine>=0.3.8",
     "qdrant-client>=1.13.3",
+    "gotenberg-client>=0.10.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4.0", "ruff>=0.1.9"]
 server = ["uvicorn", "fastapi"]
+local = ["colpali_engine>=0.3.8"]
 # gpu = ["flash-attn>=2.0.0"]
 
 [project.urls]

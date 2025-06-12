@@ -1,7 +1,5 @@
-from importlib.metadata import version
-
-from .mosaic import Mosaic, QdrantClient
+from .mosaic import Mosaic, QdrantClient, ALLOWED_EXT
 
 # __version__ = version("Mosaic")
 
-__all__ = ["Mosaic", "QdrantClient"]
+__all__ = ["Mosaic", "QdrantClient", "ALLOWED_EXT"]
