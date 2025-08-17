@@ -1,6 +1,7 @@
 import uuid
 import concurrent.futures
 import threading
+import queue
 
 from tqdm import tqdm
 from PIL import Image
@@ -40,6 +41,8 @@ class Mosaic:
         self.inference_client = inference_client
         self.gotenberg_url = gotenberg_url
         self._index_lock = threading.Lock()
+        self.indexing_queue = queue.PriorityQueue()
+        self._start_indexing_worker()
 
         self.qdrant_client = db_client or QdrantClient(":memory:")
 
@@ -133,6 +136,23 @@ class Mosaic:
         except Exception as e:
             raise RuntimeError(f"Failed to convert {file_path} to PDF: {str(e)}")
 
+    def _start_indexing_worker(self):
+        worker = threading.Thread(target=self._process_indexing_queue, daemon=True)
+        worker.start()
+
+    def _process_indexing_queue(self):
+        while True:
+            _priority, kwargs = self.indexing_queue.get()
+            if kwargs is None:
+                break
+
+            try:
+                self._perform_indexing(**kwargs)
+            except Exception as e:
+                print(f"Error during background indexing: {e}")
+            finally:
+                self.indexing_queue.task_done()
+
     def _create_collection(self, binary_quantization=True):
         return self.qdrant_client.create_collection(
             collection_name=self.collection_name,
@@ -187,6 +207,29 @@ class Mosaic:
                 )
 
     def index_file(
+        self,
+        file_id: str,
+        file_path: Path,
+        metadata: Optional[dict] = {},
+        store_img_bs64: Optional[bool] = True,
+        max_image_dims: Tuple[int, int] = (1568, 1568),
+        avoid_file_existence_check: Optional[bool] = False,
+        pdf_output_path: Optional[Union[Path, str]] = None,
+        priority: int = 0,
+    ):
+        task_kwargs = {
+            "file_id": file_id,
+            "file_path": file_path,
+            "metadata": metadata,
+            "store_img_bs64": store_img_bs64,
+            "max_image_dims": max_image_dims,
+            "avoid_file_existence_check": avoid_file_existence_check,
+            "pdf_output_path": pdf_output_path,
+        }
+        # PriorityQueue is a min-heap, so use negative priority for max-heap behavior
+        self.indexing_queue.put((-priority, task_kwargs))
+
+    def _perform_indexing(
         self,
         file_id: str,
         file_path: Path,
