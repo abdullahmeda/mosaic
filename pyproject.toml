@@ -19,6 +19,8 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "tqdm",
+    "requests",
     "pdf2image",
     "qdrant-client>=1.13.3",
     "gotenberg-client>=0.10.0",
