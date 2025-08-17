@@ -441,3 +441,45 @@ class Mosaic:
             documents.append(Document(**data))
 
         return documents
+
+    def remove_file(self, relative_file_path: str):
+        """Remove all documents from the index that match the given relative file path.
+        
+        Args:
+            relative_file_path: The relative file path stored in metadata['metadata']['relative_file_path']
+        
+        Returns:
+            pdf_id of the removed documents, or None if no documents found
+        """
+        
+        # Count total documents for confirmation
+        count_result = self.qdrant_client.count(
+            collection_name=self.collection_name,
+            count_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="metadata.relative_file_path", 
+                        match=models.MatchValue(value=relative_file_path)
+                    )
+                ]
+            ),
+            exact=True,
+        )
+        
+        # Delete the documents
+        self.qdrant_client.delete(
+            collection_name=self.collection_name,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="metadata.relative_file_path",
+                            match=models.MatchValue(value=relative_file_path)
+                        )
+                    ]
+                )
+            ),
+        )
+        
+        print(f"Removed {count_result.count} documents with relative_file_path: {relative_file_path}")
+        return count_result.count

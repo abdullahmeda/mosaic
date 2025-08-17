@@ -3,11 +3,15 @@
 help:  ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
+env:
+	python3 -m venv .venv
+	. .venv/bin/activate && pip install --upgrade pip
+
 install:  ## Install the package
-	pip install -e .
+	. .venv/bin/activate && pip install -e .
 
 install-dev:  ## Install the package with development dependencies
-	pip install -e ".[dev]"
+	. .venv/bin/activate && pip install -e ".[dev]"
 
 test:  ## Run tests
 	pytest tests/ -v
