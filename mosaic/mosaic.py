@@ -18,8 +18,8 @@ from mosaic.utils import (
     base64_encode_image,
     resize_image,
     resize_image_list,
+    get_logger
 )
-from mosaic.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -194,24 +194,20 @@ class Mosaic:
         self,
         file_id: str,
         file_path: Path,
+        images: List[Image.Image],
         metadata: Optional[dict] = {},
         store_img_bs64: Optional[bool] = True,
-        max_image_dims: Tuple[int, int] = (1568, 1568),
         avoid_file_existence_check: Optional[bool] = False,
         pdf_output_path: Optional[Union[Path, str]] = None,
     ):
+        logger.info(f"Indexing {str(file_path)}")
         file_path = file_path.absolute()
 
         if not file_path.is_file():
             logger.error(f"Path is not a file: {file_path}")
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        max_img_height, max_img_width = max_image_dims
-
-        images = convert_from_path(file_path)
-        images = resize_image_list(images, max_img_height, max_img_width)
         base64_images = [None] * len(images)
-
         if store_img_bs64:
             base64_images = base64_encode_image_list(images)
 

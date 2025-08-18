@@ -62,6 +62,37 @@ def setup_logging(level: int = logging.INFO, format_string: Optional[str] = None
     return _logger
 
 
+def get_logger(name: Optional[str] = None) -> logging.Logger:
+    """Get a logger for the specified module.
+    
+    This creates child loggers under the main sync4phi logger hierarchy.
+    
+    Parameters:
+        name: Logger name (usually __name__ from the calling module)
+              If None, returns the main sync4phi logger
+              
+    Returns:
+        A logger instance
+    """
+    global _logger
+    
+    # Ensure main logger is initialized
+    if _logger is None:
+        setup_logging()
+    
+    if name is None:
+        return _logger
+    
+    # Create child logger name
+    # If name already starts with sync4phi, use as-is, otherwise prepend it
+    if name.startswith(LOGGER_NAME):
+        logger_name = name
+    else:
+        logger_name = f"{LOGGER_NAME}.{name}"
+    
+    return logging.getLogger(logger_name)
+
+
 def base64_encode_image(image: Image.Image, format: str = "PNG") -> str:
     with io.BytesIO() as buffer:
         image.save(buffer, format)
