@@ -1,6 +1,8 @@
 import uuid
 import concurrent.futures
 import threading
+import queue
+import itertools
 
 from tqdm import tqdm
 from PIL import Image
@@ -19,10 +21,6 @@ from mosaic.utils import (
     resize_image,
     resize_image_list,
 )
-from mosaic.utils import get_logger
-
-logger = get_logger(__name__)
-
 
 # Supported file extensions for Gotenberg conversion
 ALLOWED_EXT = {
@@ -44,6 +42,10 @@ class Mosaic:
         self.inference_client = inference_client
         self.gotenberg_url = gotenberg_url
         self._index_lock = threading.Lock()
+        self.indexing_queue = queue.PriorityQueue()
+        self._task_counter = itertools.count()
+        print(f"[Mosaic] Initialized collection '{self.collection_name}'. Starting background worker...")
+        self._start_indexing_worker()
 
         self.qdrant_client = db_client or QdrantClient(":memory:")
 
@@ -137,6 +139,27 @@ class Mosaic:
         except Exception as e:
             raise RuntimeError(f"Failed to convert {file_path} to PDF: {str(e)}")
 
+    def _start_indexing_worker(self):
+        worker = threading.Thread(target=self._process_indexing_queue, daemon=True)
+        worker.start()
+        print("[Mosaic] Background indexing worker started.")
+
+    def _process_indexing_queue(self):
+        while True:
+            _priority, _order, kwargs = self.indexing_queue.get()
+            if kwargs is None:
+                break
+
+            try:
+                file_path = kwargs.get("file_path")
+                print(f"[Queue] Dequeued: {str(file_path)} (priority={-_priority}, order={_order})")
+                self._perform_indexing(**kwargs)
+                print(f"[Queue] Completed: {str(file_path)}")
+            except Exception as e:
+                print(f"Error during background indexing: {e}")
+            finally:
+                self.indexing_queue.task_done()
+
     def _create_collection(self, binary_quantization=True):
         return self.qdrant_client.create_collection(
             collection_name=self.collection_name,
@@ -175,6 +198,7 @@ class Mosaic:
             current_batch_ids = [str(uuid.uuid4()) for _ in range(batch_len)]
 
             try:
+                print(f"[Upsert] Inserting batch: {batch_len} points")
                 self.qdrant_client.upsert(
                     collection_name=self.collection_name,
                     points=models.Batch(
@@ -184,9 +208,10 @@ class Mosaic:
                     ),
                     wait=True,
                 )
+                print(f"[Upsert] Batch done: {batch_len} points")
 
             except Exception as e:
-                logger.error(
+                print(
                     f"Failed to upsert points to collection '{self.collection_name}': {str(e)}"
                 )
 
@@ -199,16 +224,43 @@ class Mosaic:
         max_image_dims: Tuple[int, int] = (1568, 1568),
         avoid_file_existence_check: Optional[bool] = False,
         pdf_output_path: Optional[Union[Path, str]] = None,
+        priority: int = 0,
+    ):
+        task_kwargs = {
+            "file_id": file_id,
+            "file_path": file_path,
+            "metadata": metadata,
+            "store_img_bs64": store_img_bs64,
+            "max_image_dims": max_image_dims,
+            "avoid_file_existence_check": avoid_file_existence_check,
+            "pdf_output_path": pdf_output_path,
+        }
+        # PriorityQueue is a min-heap; we negate priority for max-heap behavior and add a tie-breaker order
+        order = next(self._task_counter)
+        print(f"[Queue] Enqueuing: {str(file_path)} (priority={priority}, order={order})")
+        self.indexing_queue.put((-priority, order, task_kwargs))
+
+    def _perform_indexing(
+        self,
+        file_id: str,
+        file_path: Path,
+        metadata: Optional[dict] = {},
+        store_img_bs64: Optional[bool] = True,
+        max_image_dims: Tuple[int, int] = (1568, 1568),
+        avoid_file_existence_check: Optional[bool] = False,
+        pdf_output_path: Optional[Union[Path, str]] = None,
     ):
         file_path = file_path.absolute()
 
         if not file_path.is_file():
-            logger.error(f"Path is not a file: {file_path}")
+            print(f"Path is not a file: {file_path}")
             raise FileNotFoundError(f"File not found: {file_path}")
 
         max_img_height, max_img_width = max_image_dims
 
+        print(f"[Index] Loading pages for: {str(file_path)}")
         images = convert_from_path(file_path)
+        print(f"[Index] {len(images)} pages detected for: {str(file_path)}")
         images = resize_image_list(images, max_img_height, max_img_width)
         base64_images = [None] * len(images)
 
@@ -228,7 +280,6 @@ class Mosaic:
             embedding = np.array(embedding)
             return extended_metadata, embedding
 
-        logger.info(f"Indexing {str(file_path)}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             args_list = enumerate(zip(images, base64_images), start=1)
             results = list(
@@ -238,7 +289,6 @@ class Mosaic:
                     desc=f"Indexing {str(file_path)}",
                 )
             )
-        logger.info(f"Indexed {str(file_path)}")
 
         if results:
             payloads, embeddings = zip(*results)
@@ -250,14 +300,18 @@ class Mosaic:
         if embeddings:
             embeddings = np.concatenate(embeddings, axis=0)
 
-            logger.info(f"Adding {len(embeddings)} embeddings to index")
+            print(f"[Upsert] Preparing to upsert {len(payloads)} vectors for: {str(file_path)}")
             with self._index_lock:
                 self._add_to_index(vectors=embeddings, payloads=payloads)
-            logger.info(f"Added {len(embeddings)} embeddings to index")
 
         del images
         del embeddings
 
+    def wait_for_indexing(self):
+        """Block until all enqueued indexing tasks have finished."""
+        print("[Mosaic] Waiting for all indexing tasks to finish...")
+        self.indexing_queue.join()
+        print("[Mosaic] All indexing tasks completed.")
 
     def search_text(self, query: str, top_k: int = 5):
         embedding = self.inference_client.encode_query(query)
@@ -312,5 +366,5 @@ class Mosaic:
             ),
         )
         
-        logger.info(f"Removed {count_result.count} documents with relative_file_path: {relative_file_path}")
+        print(f"Removed {count_result.count} documents with relative_file_path: {relative_file_path}")
         return count_result.count

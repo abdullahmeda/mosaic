@@ -1,7 +1,65 @@
+"""Common utility functions and logging configuration for mosaic"""
+
 import io
 import base64
 
 from PIL import Image
+
+import logging
+import sys
+from typing import Optional
+
+# Main application logger name
+LOGGER_NAME = "mosaic"
+
+# Global logger instance
+_logger: Optional[logging.Logger] = None
+
+
+def setup_logging(level: int = logging.INFO, format_string: Optional[str] = None) -> logging.Logger:
+    """Setup centralized logging configuration for mosaic.
+    
+    This should be called once at application startup to configure the main logger.
+    All other modules should use get_logger() to get child loggers.
+    
+    Parameters:
+        level: Logging level (e.g., logging.INFO, logging.DEBUG)
+        format_string: Custom format string for log messages
+        
+    Returns:
+        The configured main logger
+    """
+    global _logger
+    
+    if _logger is not None:
+        return _logger
+    
+    # Default format if none provided
+    if format_string is None:
+        format_string = "%(asctime)s - %(levelname)s - %(message)s"
+    
+    # Create main logger
+    _logger = logging.getLogger(LOGGER_NAME)
+    _logger.setLevel(level)
+    
+    # Remove any existing handlers to avoid duplicates
+    _logger.handlers.clear()
+    
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+    
+    # Create formatter
+    formatter = logging.Formatter(format_string)
+    console_handler.setFormatter(formatter)
+    
+    # Add handler to logger
+    _logger.addHandler(console_handler)
+    
+    # Prevent propagation to root logger to avoid duplicate messages
+    _logger.propagate = False
+    
+    return _logger
 
 
 def base64_encode_image(image: Image.Image, format: str = "PNG") -> str:
