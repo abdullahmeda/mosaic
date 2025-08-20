@@ -269,7 +269,7 @@ class Mosaic:
 
         return documents
 
-    def remove_file(self, relative_file_path: str):
+    def remove_file(self, file_id: str):
         """Remove all documents from the index that match the given relative file path.
         
         Args:
@@ -285,8 +285,8 @@ class Mosaic:
             count_filter=models.Filter(
                 must=[
                     models.FieldCondition(
-                        key="metadata.relative_file_path", 
-                        match=models.MatchValue(value=relative_file_path)
+                        key="file_id", 
+                        match=models.MatchValue(value=file_id)
                     )
                 ]
             ),
@@ -300,13 +300,13 @@ class Mosaic:
                 filter=models.Filter(
                     must=[
                         models.FieldCondition(
-                            key="metadata.relative_file_path",
-                            match=models.MatchValue(value=relative_file_path)
+                            key="file_id",
+                            match=models.MatchValue(value=file_id)
                         )
                     ]
                 )
             ),
         )
         
-        logger.info(f"Removed {count_result.count} documents with relative_file_path: {relative_file_path}")
+        logger.info(f"Removed {count_result.count} documents with file_id: {file_id}")
         return count_result.count
