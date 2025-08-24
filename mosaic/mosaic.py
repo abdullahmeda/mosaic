@@ -1,4 +1,5 @@
 import uuid
+import time
 import concurrent.futures
 import threading
 
@@ -18,17 +19,14 @@ from mosaic.utils import (
     base64_encode_image,
     resize_image,
     resize_image_list,
-    get_logger
+    get_logger,
 )
 
 logger = get_logger(__name__)
 
 
 # Supported file extensions for Gotenberg conversion
-ALLOWED_EXT = {
-    ".txt", ".rtf", ".doc", ".docx", ".odt",
-    ".ppt", ".pptx", ".odp"
-}
+ALLOWED_EXT = {".txt", ".rtf", ".doc", ".docx", ".odt", ".ppt", ".pptx", ".odp"}
 
 
 class Mosaic:
@@ -82,7 +80,7 @@ class Mosaic:
         gotenberg_url: Optional[str] = None,
     ):
         from mosaic.cloud import CloudInferenceClient
-        
+
         return cls(
             collection_name=collection_name,
             db_client=db_client,
@@ -99,14 +97,16 @@ class Mosaic:
 
         return self.collection_name in collection_names
 
-    def _convert_to_pdf(self, file_path: Path, output_pdf_path: Optional[Path] = None) -> Path:
+    def _convert_to_pdf(
+        self, file_path: Path, output_pdf_path: Optional[Path] = None
+    ) -> Path:
         """Convert a file to PDF using Gotenberg.
-        
+
         Args:
             file_path: Path to the file to convert
-            output_pdf_path: Path where the converted PDF should be saved. 
+            output_pdf_path: Path where the converted PDF should be saved.
                            If None, saves alongside the original file with .pdf extension.
-        
+
         Returns:
             Path to the converted PDF file
         """
@@ -115,24 +115,26 @@ class Mosaic:
                 f"Gotenberg URL not provided. Cannot convert {file_path.suffix} files. "
                 "Please provide gotenberg_url when initializing Mosaic."
             )
-        
+
         if file_path.suffix.lower() not in ALLOWED_EXT:
-            raise ValueError(f"File extension {file_path.suffix} not supported for conversion")
-        
+            raise ValueError(
+                f"File extension {file_path.suffix} not supported for conversion"
+            )
+
         # Auto-generate output path if not provided
         if output_pdf_path is None:
             output_pdf_path = file_path.with_suffix(".pdf")
-        
+
         # Ensure output directory exists
         output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             with GotenbergClient(self.gotenberg_url) as client:
                 with client.libre_office.to_pdf() as route:
                     route.convert(file_path)
                     response = route.run()
                     response.to_file(output_pdf_path)
-            
+
             return output_pdf_path
         except Exception as e:
             raise RuntimeError(f"Failed to convert {file_path} to PDF: {str(e)}")
@@ -200,7 +202,6 @@ class Mosaic:
         avoid_file_existence_check: Optional[bool] = False,
         pdf_output_path: Optional[Union[Path, str]] = None,
     ):
-        logger.info(f"Indexing {str(file_path)}")
         file_path = file_path.absolute()
 
         if not file_path.is_file():
@@ -224,17 +225,13 @@ class Mosaic:
             embedding = np.array(embedding)
             return extended_metadata, embedding
 
-        logger.info(f"Indexing {str(file_path)}")
+        start_time = time.perf_counter()
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             args_list = enumerate(zip(images, base64_images), start=1)
-            results = list(
-                tqdm(
-                    executor.map(process_page, args_list),
-                    total=len(images),
-                    desc=f"Indexing {str(file_path)}",
-                )
-            )
-        logger.info(f"Indexed {str(file_path)}")
+            results = list(executor.map(process_page, args_list))
+
+        indexing_duration = round(time.perf_counter() - start_time, 5)
+        logger.info("Time taken to index %s: %.5fs seconds", str(file_path), indexing_duration)
 
         if results:
             payloads, embeddings = zip(*results)
@@ -243,17 +240,18 @@ class Mosaic:
         else:
             payloads, embeddings = [], []
 
+        start_time = time.perf_counter()
         if embeddings:
             embeddings = np.concatenate(embeddings, axis=0)
 
-            logger.info(f"Adding {len(embeddings)} embeddings to index")
             with self._index_lock:
                 self._add_to_index(vectors=embeddings, payloads=payloads)
-            logger.info(f"Added {len(embeddings)} embeddings to index")
+
+        embedding_duration = round(time.perf_counter() - start_time, 5)
+        logger.info("Time taken to embed %s: %.5fs seconds", str(file_path), embedding_duration)
 
         del images
         del embeddings
-
 
     def search_text(self, query: str, top_k: int = 5):
         embedding = self.inference_client.encode_query(query)
@@ -271,28 +269,27 @@ class Mosaic:
 
     def remove_file(self, file_id: str):
         """Remove all documents from the index that match the given relative file path.
-        
+
         Args:
             relative_file_path: The relative file path stored in metadata['metadata']['relative_file_path']
-        
+
         Returns:
             pdf_id of the removed documents, or None if no documents found
         """
-        
+
         # Count total documents for confirmation
         count_result = self.qdrant_client.count(
             collection_name=self.collection_name,
             count_filter=models.Filter(
                 must=[
                     models.FieldCondition(
-                        key="file_id", 
-                        match=models.MatchValue(value=file_id)
+                        key="file_id", match=models.MatchValue(value=file_id)
                     )
                 ]
             ),
             exact=True,
         )
-        
+
         # Delete the documents
         self.qdrant_client.delete(
             collection_name=self.collection_name,
@@ -300,13 +297,11 @@ class Mosaic:
                 filter=models.Filter(
                     must=[
                         models.FieldCondition(
-                            key="file_id",
-                            match=models.MatchValue(value=file_id)
+                            key="file_id", match=models.MatchValue(value=file_id)
                         )
                     ]
                 )
             ),
         )
-        
-        logger.info(f"Removed {count_result.count} documents with file_id: {file_id}")
+
         return count_result.count
